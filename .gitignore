@@ -19,4 +19,4 @@ uploads/
 *.swp
 *.swo
 
-/backend/treasure_hunt.db
+backend/treasure_hunt.db
