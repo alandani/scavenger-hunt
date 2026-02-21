@@ -1,0 +1,23 @@
+# Environment & secrets
+.env
+.env.local
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
+# Uploads
+uploads/
+
+# SQLite
+*.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

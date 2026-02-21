@@ -11,21 +11,21 @@ Backend for a kids’ treasure hunt app (ages 5–12) with AI-generated activiti
 ### 1.1 Activity Generation (AI)
 | Requirement | Backend Implementation |
 |-------------|------------------------|
-| AI-generated activity list | Call Groq/Cloudflare AI to create activities |
-| Age group filtering | Store child age; filter/personalise prompts per age band |
+| AI-generated activity list | Call Groq to create object-based scavenger hunt activities |
+| Age group filtering | Simpler tasks for 5–7, more specific (shape/color/texture) for 8–12 |
 | Location-based (Sydney MVP) | Sydney suburbs/areas in DB; activities tagged with location |
-| Categories | `city`, `beach`, `bush`, `garden` – store and filter by category |
+| Categories | `city`, `beach`, `bush`, `garden` – each suggests object types |
 
-**Suggested age bands:** 5–7, 8–10, 11–12 (or per your product spec)
+**Activity format:** "Find an object" tasks – e.g. find a shell on a beach, a leaf with a specific shape, an object of X shape and Y colour. Kid takes a photo of the object; AI validates and awards a token on success.
 
 ### 1.2 Photo Validation (AI)
 | Requirement | Backend Implementation |
 |-------------|------------------------|
-| Take a photo | App uploads image; backend stores and processes it |
-| AI validation | Groq vision models (e.g. Llama 4 Scout) to verify activity completion |
-| Must be taken at the time | Use EXIF timestamp and/or geolocation for basic fraud checks |
+| Take a photo | Kid photographs the found object; app uploads image |
+| AI validation | Groq vision (Llama 4 Scout) checks object matches criteria (shape, colour, type) |
+| Must be taken at the time | EXIF timestamp optional (future anti-cheat) |
 
-**Validation flow:** Upload image → Extract metadata (time, location) → AI prompt to compare image with activity description → Approve/Reject
+**Validation flow:** Kid finds object → Takes photo → Upload → AI checks photo shows correct object (type, shape, colour) → Approve/Reject → Token awarded on success
 
 ### 1.3 Rewards System
 | Requirement | Backend Implementation |
@@ -41,36 +41,35 @@ Backend for a kids’ treasure hunt app (ages 5–12) with AI-generated activiti
 |-------|--------|------|
 | **Language** | Python 3.11+ | Confirmed |
 | **Framework** | FastAPI | Async, OpenAPI, validation |
-| **Database** | TBC – see options below | |
+| **Database** | SQLAlchemy 2 (async) + SQLite | Via aiosqlite driver |
 | **AI – Text** | Groq API | LLM for activity generation |
-| **AI – Vision** | Groq API (Llama 4 Scout/Maverick) | Photo validation |
-| **File Storage** | Local/S3/R2 | For activity photos |
+| **AI – Vision** | Groq API (Llama 4 Scout) | Photo validation |
+| **File Storage** | Local `uploads/` directory | For activity photos (MVP) |
 
 ---
 
-## 3. Database Options (TBC)
+## 3. Database
 
-| Option | Pros | Cons | Best For |
-|--------|------|------|----------|
-| **PostgreSQL** | Mature, relational, JSON support | Needs hosting | Production, multi-user |
-| **Supabase** | Managed Postgres, auth, storage | Vendor lock-in | Fast MVP with auth + storage |
-| **SQLite** | Zero setup, file-based | Not ideal for many concurrent users | Local dev, small MVP |
-| **MongoDB** | Flexible schema | Less strict structure | Prototyping, document-style data |
+**SQLite** with `aiosqlite` (async driver). Database file: `treasure_hunt.db` in the backend directory. Zero setup, file-based, suitable for MVP.
 
-**Recommendation for MVP:** PostgreSQL via Supabase (managed Postgres + auth + storage).
+**Note:** If you had an existing database before the kid registration update, delete `treasure_hunt.db` and restart the app to recreate tables with the new schema.
 
 ---
 
-## 4. Data Model (Draft)
+## 4. Data Model (Implemented)
+
+ORM: `app/db/models.py` (SQLAlchemy).
 
 ```
 Child
 ├── id (PK)
 ├── name
-├── age (for age band filtering)
-├── parent_account_id (FK)
+├── date_of_birth
+├── password_hash (bcrypt)
+├── parent_account_id (optional; for next MVP)
 ├── token_balance
 └── created_at
+   (+ age computed from date_of_birth)
 
 Activity
 ├── id (PK)
@@ -79,40 +78,47 @@ Activity
 ├── category (city|beach|bush|garden)
 ├── age_min, age_max
 ├── location_sydney (suburb/area name)
-├── ai_prompt_for_validation (what to check in photo)
-└── tokens_reward
+├── ai_validation_prompt (what to check in photo)
+├── tokens_reward
+└── created_at
 
 ActivityCompletion
 ├── id (PK)
 ├── child_id (FK)
 ├── activity_id (FK)
-├── photo_url (path or S3/R2 key)
-├── photo_timestamp (from EXIF or upload time)
+├── photo_path (local path; S3/R2 key when added)
+├── photo_timestamp (optional, from EXIF)
 ├── validated (bool)
 ├── validation_response (AI reasoning)
+├── tokens_awarded
 └── completed_at
 ```
 
 ---
 
-## 5. API Endpoints (Draft)
+## 5. API Endpoints (Implemented)
+
+All under prefix `/api/v1`.
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| `GET` | `/activities` | List activities (filters: age, category, location) |
-| `POST` | `/activities/generate` | Generate new activities via AI (admin/internal) |
-| `POST` | `/activities/{id}/submit-photo` | Submit photo for validation |
+| `GET` | `/activities/` | List activities (query: `category`, `age_min`, `age_max`, `location`) |
+| `POST` | `/activities/generate` | Generate activities via AI and persist to DB |
+| `POST` | `/activities/{id}/submit-photo?child_id={id}` | Submit photo (multipart); validate via AI; award tokens on success |
+| `POST` | `/children/register` | Register child (body: `name`, `date_of_birth`, `password`; age 5–12, password min 6 chars) |
+| `GET` | `/children/{id}` | Get child profile and token balance |
 | `GET` | `/children/{id}/tokens` | Get child token balance |
-| `GET` | `/children/{id}/completions` | List completed activities |
+| `GET` | `/children/{id}/completions` | List completed activities (with activity title, tokens_awarded, validated) |
 
 ---
 
 ## 6. AI Integration
 
 ### 6.1 Activity Generation (Groq)
-- **Model:** e.g. `llama-3.1-70b-versatile` (or current recommended model)
-- **Input:** age band, category, Sydney location
-- **Output:** Structured JSON with title, description, validation criteria
+- **Model:** `llama-3.1-70b-versatile`
+- **Input:** age band, category (beach/bush/garden/city), Sydney location
+- **Output:** Object-based tasks with title, description, `ai_validation_prompt` (shape/colour/type)
+- **Examples:** "Find a spiral shell on the beach", "Find a heart-shaped leaf", "Find something round and blue"
 
 ### 6.2 Photo Validation (Groq Vision)
 - **Model:** `meta-llama/llama-4-scout-17b-16e-instruct`
@@ -126,71 +132,86 @@ ActivityCompletion
 
 ---
 
-## 7. Suggested Project Structure
+## 7. Project Structure
 
 ```
-treasure-hunt/
-├── backend/
-│   ├── app/
+backend/
+├── app/
+│   ├── __init__.py
+│   ├── main.py              # FastAPI app, lifespan (init_db)
+│   ├── config.py            # Pydantic Settings (env vars)
+│   ├── models/              # Pydantic request/response schemas
+│   │   └── schemas.py
+│   ├── db/
 │   │   ├── __init__.py
-│   │   ├── main.py              # FastAPI app
-│   │   ├── config.py            # Env vars
-│   │   ├── models/              # SQLAlchemy/Pydantic models
-│   │   ├── routes/              # API routes
-│   │   ├── services/
-│   │   │   ├── ai_service.py    # Groq integration
-│   │   │   ├── activity_service.py
-│   │   │   └── validation_service.py
-│   │   └── db/                  # DB setup, migrations
-│   ├── requirements.txt
-│   └── .env.example
-├── frontend/                    # React Native / Expo
-└── BACKEND_ARCHITECTURE.md
+│   │   ├── base.py          # Engine, async session, init_db
+│   │   └── models.py        # SQLAlchemy ORM (Child, Activity, ActivityCompletion)
+│   ├── routes/
+│   │   ├── activities.py
+│   │   └── children.py
+│   └── services/
+│       ├── ai_service.py    # Groq text + vision
+│       └── activity_service.py  # List, persist, submit-photo logic
+├── requirements.txt
+├── run.py
+└── .env.example
 ```
 
 ---
 
 ## 8. Environment Variables
 
-```env
-# Database
-DATABASE_URL=postgresql://user:pass@host:5432/treasure_hunt
+See `backend/.env.example`. Loaded via `app/config.py` (Pydantic Settings).
 
-# AI (Groq)
+```env
+# Database (SQLite)
+DATABASE_URL=sqlite+aiosqlite:///./treasure_hunt.db
+
+# AI (Groq) – required for generate and submit-photo
 GROQ_API_KEY=your_groq_api_key
 
-# Storage (when using S3/R2)
-S3_BUCKET=
-S3_REGION=
-AWS_ACCESS_KEY_ID=
-AWS_SECRET_ACCESS_KEY=
+# App
+DEBUG=true
+API_PREFIX=/api/v1
+UPLOAD_DIR=uploads
+PHOTO_MAX_AGE_MINUTES=60
 
-# Security
-JWT_SECRET=
-API_RATE_LIMIT=100  # requests per minute
+# Sydney bounds (optional)
+SYDNEY_LAT_MIN=-34.2
+SYDNEY_LAT_MAX=-33.6
+SYDNEY_LON_MIN=150.5
+SYDNEY_LON_MAX=151.4
+
+# Future: Storage (S3/R2), JWT_SECRET, API_RATE_LIMIT
 ```
 
 ---
 
 ## 9. Frontend–Backend Contract (Notes for Frontend Team)
 
-- **Auth:** JWT or Supabase Auth (depending on DB choice)
-- **File upload:** Multipart form data to `/activities/{id}/submit-photo`
-- **AI responses:** Structured JSON; handle validation failure gracefully
-- **Tokens:** Returned in child profile and on completion events
+- **Base URL:** `{host}/api/v1`
+- **Register child:** `POST /children/register` with JSON `{ "name": string, "date_of_birth": "YYYY-MM-DD", "password": string }` (age 5–12, password min 6 chars). Parent/guardian details not required yet (planned for next MVP).
+- **List activities:** `GET /activities/?category=beach&age_min=5&age_max=8&location=Bondi` (all query params optional).
+- **Submit photo:** `POST /activities/{id}/submit-photo?child_id={child_id}` with multipart form field `photo` (image file, max 20MB). Response: `{ "valid": bool, "reasoning": string, "tokens_awarded": number }`.
+- **Tokens:** Returned in `GET /children/{id}` as `token_balance`, and in submit-photo response as `tokens_awarded`.
+- **Auth:** Not yet implemented; to be added (JWT or Supabase Auth).
 
 ---
 
 ## 10. MVP Milestones (Backend)
 
-1. [ ] Set up FastAPI app + basic health check
-2. [ ] DB schema + migrations (child, activity, completion)
-3. [ ] Groq activity generation endpoint
-4. [ ] Groq vision photo validation endpoint
-5. [ ] Token award on successful validation
-6. [ ] Auth integration (align with frontend)
-7. [ ] Image storage (local or S3/R2)
+1. [x] Set up FastAPI app + basic health check
+2. [x] DB schema (SQLAlchemy; tables created on startup via `init_db`)
+3. [x] Groq activity generation endpoint + persist to DB
+4. [x] Groq vision photo validation endpoint
+5. [x] Token award on successful validation
+6. [x] Image storage (local `uploads/` directory)
+7. [x] Kid registration (name, date_of_birth, password)
+8. [ ] Parent/guardian details (required for registration – next MVP)
+9. [ ] Login / session (JWT) for authenticated requests
+10. [ ] EXIF/photo freshness check (optional anti-cheat)
+11. [ ] Alembic migrations (for production schema changes)
 
 ---
 
-*Document version: 1.0 – Feb 2025*
+*Document version: 1.1 – Feb 2025*

@@ -23,10 +23,12 @@ pip install -r requirements.txt
 cp .env.example .env
 # Edit .env with GROQ_API_KEY
 
-uvicorn app.main:app --reload
+python -m uvicorn app.main:app --reload
 ```
 
 API docs: http://localhost:8000/docs
+
+**API base:** `http://localhost:8000/api/v1`
 
 ### Frontend
 
@@ -42,9 +44,9 @@ npx expo start
 
 ## Features
 
-- **Activities:** AI-generated, filterable by age, category (city/beach/bush/garden), Sydney location
-- **Photo validation:** AI checks completion photos
-- **Rewards:** Tokens per completed task
+- **Registration:** Kids (5–12) register with name, date of birth, password (parent details planned for next MVP)
+- **Activities:** AI-generated "find an object" tasks by age and category (beach, bush, garden, city) – e.g. find a shell, a leaf with a specific shape, or an object of a given colour and shape
+- **Photo validation:** Kid photographs the found object; AI validates it matches (shape, colour, type) and awards a token on success
 
 ## Tech stack
 
@@ -53,4 +55,16 @@ npx expo start
 | Backend  | Python, FastAPI        |
 | Frontend | React Native, Expo     |
 | AI       | Groq (text + vision)   |
-| Database | TBC (PostgreSQL/Supabase recommended) |
+| Database | SQLite |
+
+## API overview
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/api/v1/activities/` | List activities (query: `category`, `age_min`, `age_max`, `location`) |
+| `POST` | `/api/v1/activities/generate` | Generate activities via AI and persist to DB |
+| `POST` | `/api/v1/activities/{id}/submit-photo?child_id=1` | Submit photo for validation; awards tokens on success |
+| `POST` | `/api/v1/children/register` | Register child (`name`, `date_of_birth`, `password`; age 5–12) |
+| `GET` | `/api/v1/children/{id}` | Get child profile and token balance |
+| `GET` | `/api/v1/children/{id}/tokens` | Get token balance |
+| `GET` | `/api/v1/children/{id}/completions` | List completed activities |
